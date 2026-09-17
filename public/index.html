@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vest Control · Remote</title>
+<style>
+  :root{
+    --bg:#0e1116;--panel:#171b22;--panel-2:#1e232c;--border:#2a303b;--text:#e7ebf1;
+    --text-dim:#8b93a1;--accent:#4fd1c5;--accent-dim:#2b5e58;--danger:#e5484d;
+    --danger-bright:#ff5b60;--mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border)}
+  header h1{font-size:15px;font-weight:600;margin:0}
+  header h1 span{color:var(--text-dim);font-weight:400}
+  #status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--danger);margin-right:7px;vertical-align:middle}
+  #status-dot.ok{background:var(--accent)}
+  #status-dot.wait{background:#d6a635}
+  #status-text{font-size:13px;color:var(--text-dim)}
+  main{display:grid;grid-template-columns:1fr 300px;max-width:1100px;margin:0 auto}
+  @media (max-width:800px){main{grid-template-columns:1fr}}
+  .stage{padding:20px;display:flex;flex-direction:column;align-items:center;gap:14px}
+  .tabs{display:flex;gap:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:4px}
+  .tabs button{background:transparent;border:none;color:var(--text-dim);padding:6px 16px;border-radius:6px;font-size:13px;cursor:pointer;font-family:var(--sans)}
+  .tabs button.active{background:var(--panel-2);color:var(--text)}
+  .bodymap{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px}
+  .bodymap svg{touch-action:none;user-select:none;-webkit-user-select:none;display:block;cursor:crosshair}
+  svg circle.motor{fill:var(--panel-2);stroke:var(--border);stroke-width:2;transition:fill 40ms linear,stroke 40ms linear,fill-opacity 40ms linear}
+  svg circle.motor.calib{cursor:pointer}
+  svg text.motor-label{fill:var(--text-dim);font-family:var(--mono);font-size:10px;text-anchor:middle;pointer-events:none;user-select:none}
+  svg path.outline{fill:none;stroke:var(--border);stroke-width:2}
+  svg circle.brush{fill:var(--accent);fill-opacity:.06;stroke:var(--accent);stroke-opacity:.5;stroke-width:2;pointer-events:none}
+  .hint{font-size:12px;color:var(--text-dim);max-width:360px;text-align:center;line-height:1.5}
+  .identify-row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+  .btn-secondary{background:var(--panel-2);border:1px solid var(--border);color:var(--text);padding:7px 12px;border-radius:7px;font-size:12.5px;cursor:pointer;font-family:var(--sans)}
+  .btn-secondary:hover{border-color:var(--accent)}
+  .btn-secondary.on{border-color:var(--accent);color:var(--accent)}
+  .btn-secondary:disabled{opacity:.5;cursor:default}
+  aside{border-left:1px solid var(--border);padding:20px;display:flex;flex-direction:column;gap:22px}
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field label{font-size:12px;color:var(--text-dim);display:flex;justify-content:space-between}
+  .field label .val{font-family:var(--mono);color:var(--text)}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  input[type=text],input[type=password],input[type=number]{background:var(--panel-2);border:1px solid var(--border);color:var(--text);padding:7px 9px;border-radius:6px;font-family:var(--mono);font-size:13px;width:100%}
+  .section-title{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--text-dim);margin:0 0 4px 0}
+  #stop-btn{position:fixed;right:24px;bottom:24px;width:96px;height:96px;border-radius:50%;background:var(--danger);border:3px solid var(--danger-bright);color:#fff;font-weight:700;font-size:14px;letter-spacing:.5px;cursor:pointer;box-shadow:0 4px 20px rgba(229,72,77,.45);z-index:50}
+  #stop-btn:active{transform:scale(.95)}
+  .kbd{font-family:var(--mono);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-size:11px}
+  .connect-status{font-size:12px;padding:8px 10px;border-radius:7px;background:var(--panel-2);border:1px solid var(--border);line-height:1.5;word-break:break-word}
+  .connect-status.ok{border-color:var(--accent-dim);color:var(--accent)}
+  .connect-status.bad{border-color:#5c2a2c;color:var(--danger-bright)}
+  .connect-status.wait{border-color:#5c4a1e;color:#e6bd57}
+</style>
+</head>
+<body>
+<header>
+  <h1>Vest Control <span>· Remote</span></h1>
+  <div><span id="status-dot"></span><span id="status-text">checking…</span></div>
+</header>
+
+<main>
+  <div class="stage">
+    <div class="tabs">
+      <button id="tab-front" class="active">Front</button>
+      <button id="tab-back">Back</button>
+    </div>
+    <div class="bodymap">
+      <svg id="svg-front" width="300" height="420" viewBox="0 0 300 420"></svg>
+      <svg id="svg-back" width="300" height="420" viewBox="0 0 300 420" style="display:none"></svg>
+    </div>
+    <div class="identify-row">
+      <button class="btn-secondary" id="identify-btn">Identify motors (sweep)</button>
+      <button class="btn-secondary" id="calibrate-btn">Calibrate mapping</button>
+      <button class="btn-secondary" id="allon-btn">Pulse all</button>
+    </div>
+    <p class="hint" id="hint-text">
+      Press and drag across the body — motors fire by how close they are to your
+      cursor, fading with distance. <b>Intensity</b> is the strength at the
+      cursor, <b>Brush size</b> is the reach.
+    </p>
+  </div>
+
+  <aside>
+    <div>
+      <p class="section-title">Session</p>
+      <div class="field"><label>Room</label><input type="text" id="cfg-room" placeholder="e.g. my-vest"></div>
+      <div class="field" style="margin-top:8px;"><label>Token</label><input type="password" id="cfg-token" placeholder="shared secret"></div>
+      <div style="margin-top:10px;"><button class="btn-secondary" id="save-cfg-btn">Save</button></div>
+      <div id="connect-status" class="connect-status" style="margin-top:10px;">enter room &amp; token</div>
+    </div>
+    <div>
+      <p class="section-title">Brush</p>
+      <div class="field"><label>Intensity <span class="val" id="intensity-val">70</span></label><input type="range" id="intensity" min="0" max="100" value="70"></div>
+      <div class="field" style="margin-top:10px;"><label>Brush size <span class="val" id="brush-val">100</span></label><input type="range" id="brush" min="30" max="200" step="5" value="100"></div>
+      <div class="field" style="margin-top:10px;"><label>Falloff <span class="val" id="falloff-val">linear</span></label><input type="range" id="falloff" min="1" max="30" step="1" value="10"></div>
+      <div class="field" style="margin-top:10px;"><label>Pulse duration (ms) <span class="val" id="duration-val">200</span></label><input type="range" id="duration" min="50" max="1000" step="10" value="200"></div>
+      <p style="font-size:11px;color:var(--text-dim);margin:6px 0 0;line-height:1.5;">Duration applies to Identify &amp; Pulse all. Falloff: low = soft/wide fade, high = sharp spotlight.</p>
+    </div>
+    <div>
+      <p class="section-title">Safety</p>
+      <p style="font-size:12.5px;color:var(--text-dim);line-height:1.6;margin:0;">
+        <span class="kbd">Esc</span> or the red button sends an immediate stop.
+        Pulses are time-limited so nothing sticks on. The person wearing the
+        vest has their own local stop on the agent that overrides this.
+      </p>
+    </div>
+  </aside>
+</main>
+
+<button id="stop-btn">STOP</button>
+
+<script>
+const ROWS=5, COLS=4;
+const TICK_MS=100;     // how often a drag emits a frame
+const FLOW_DUR=200;    // frame length while dragging (> TICK_MS so buzzes don't gap)
+const THRESHOLD=6;     // ignore motors fainter than this
+
+/* ---- session config ---- */
+function loadCfg(){ try{ return JSON.parse(localStorage.getItem("vcRemoteCfg")||"null")||{room:"",token:""}; }catch(e){ return {room:"",token:""}; } }
+function saveCfg(c){ localStorage.setItem("vcRemoteCfg", JSON.stringify(c)); }
+let cfg = loadCfg();
+
+/* ---- send commands to the relay ---- */
+async function sendCommand(command){
+  if(!cfg.room || !cfg.token) return;
+  try{
+    await fetch("/api/send",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({room:cfg.room, token:cfg.token, command})});
+  }catch(e){}
+}
+function sendMotors(motors,duration){ sendCommand({type:"dot", motors, duration}); }
+function stopAll(){ sendCommand({type:"stop"}); }
+
+/* ---- body map ---- */
+function buildLayout(base){
+  const sL=55,sR=245,wL=85,wR=215,topY=55,botY=355,dots=[];
+  for(let row=0;row<ROWS;row++){
+    const t=row/(ROWS-1), left=sL+(wL-sL)*t, right=sR+(wR-sR)*t, y=topY+(botY-topY)*t;
+    for(let col=0;col<COLS;col++){ const cx=left+(right-left)*(col/(COLS-1)); dots.push({index:base+row*COLS+col,x:cx,y}); }
+  }
+  return dots;
+}
+const frontLayout=buildLayout(0), backLayout=buildLayout(20);
+function defaultMapping(){ const m={}; for(let i=0;i<40;i++) m[i]=i; return m; }
+let mapping=JSON.parse(localStorage.getItem("vestMotorMapping")||"null")||defaultMapping();
+function saveMapping(){ localStorage.setItem("vestMotorMapping",JSON.stringify(mapping)); }
+let calibrateMode=false;
+
+function renderBody(svgEl,layout){
+  svgEl.innerHTML=""; const ns="http://www.w3.org/2000/svg";
+  const path=document.createElementNS(ns,"path"); path.setAttribute("d","M 55 55 L 245 55 L 215 355 L 85 355 Z"); path.setAttribute("class","outline"); svgEl.appendChild(path);
+  layout.forEach(dot=>{
+    const c=document.createElementNS(ns,"circle");
+    c.setAttribute("cx",dot.x); c.setAttribute("cy",dot.y); c.setAttribute("r",16); c.setAttribute("class","motor"); c.dataset.slot=dot.index;
+    const l=document.createElementNS(ns,"text"); l.setAttribute("x",dot.x); l.setAttribute("y",dot.y+4); l.setAttribute("class","motor-label"); l.textContent=mapping[dot.index];
+    c.addEventListener("click",()=>{ if(calibrateMode) calibrate(dot.index,l); });
+    svgEl.appendChild(c); svgEl.appendChild(l);
+  });
+  // brush indicator (hidden until dragging)
+  const b=document.createElementNS(ns,"circle"); b.setAttribute("class","brush"); b.setAttribute("r",0); b.style.display="none"; b.dataset.brush="1";
+  svgEl.appendChild(b);
+}
+function calibrate(slot,label){
+  const next=prompt("Motor index for this position (0-39):",mapping[slot]); if(next===null) return;
+  const n=parseInt(next,10); if(Number.isInteger(n)&&n>=0&&n<=39){ mapping[slot]=n; label.textContent=n; saveMapping(); }
+}
+
+function getIntensity(){ return parseInt(document.getElementById("intensity").value,10); }
+function getBrush(){ return parseInt(document.getElementById("brush").value,10); }
+function getFalloff(){ return parseInt(document.getElementById("falloff").value,10)/10; } // exponent, 0.1–3.0
+function getDuration(){ return parseInt(document.getElementById("duration").value,10); }
+
+/* ---- drag-to-paint ---- */
+let painting=false, curSvg=null, curLayout=null, cur={x:0,y:0}, tickTimer=null;
+
+function toSvgPoint(svgEl,evt){
+  const pt=svgEl.createSVGPoint(); pt.x=evt.clientX; pt.y=evt.clientY;
+  const ctm=svgEl.getScreenCTM(); if(!ctm) return {x:0,y:0};
+  const p=pt.matrixTransform(ctm.inverse()); return {x:p.x,y:p.y};
+}
+function computeActive(layout,cx,cy){
+  const R=getBrush(), peak=getIntensity(), exp=getFalloff(), motors=[], slotIntensity={};
+  for(const dot of layout){
+    const d=Math.hypot(dot.x-cx,dot.y-cy);
+    if(d<=R){
+      const falloff=Math.pow(1-d/R, exp);
+      const inten=Math.round(peak*falloff);
+      if(inten>=THRESHOLD){ motors.push({index:mapping[dot.index],intensity:inten}); slotIntensity[dot.index]=inten; }
+    }
+  }
+  return {motors,slotIntensity};
+}
+function paintVisual(svgEl,slotIntensity){
+  svgEl.querySelectorAll("circle.motor").forEach(c=>{
+    const inten=slotIntensity[c.dataset.slot]||0;
+    if(inten>0){ c.style.fill="var(--accent)"; c.style.fillOpacity=(0.18+0.82*(inten/100)).toFixed(3); c.style.stroke="var(--accent)"; }
+    else { c.style.fill=""; c.style.fillOpacity=""; c.style.stroke=""; }
+  });
+}
+function updateBrush(svgEl,cx,cy,show){
+  const b=svgEl.querySelector("circle.brush[data-brush]"); if(!b) return;
+  if(show){ b.setAttribute("cx",cx); b.setAttribute("cy",cy); b.setAttribute("r",getBrush()); b.style.display=""; }
+  else b.style.display="none";
+}
+function clearVisual(svgEl){
+  svgEl.querySelectorAll("circle.motor").forEach(c=>{ c.style.fill=""; c.style.fillOpacity=""; c.style.stroke=""; });
+  updateBrush(svgEl,0,0,false);
+}
+function tick(){
+  if(!painting||!curSvg) return;
+  const {motors,slotIntensity}=computeActive(curLayout,cur.x,cur.y);
+  paintVisual(curSvg,slotIntensity);
+  updateBrush(curSvg,cur.x,cur.y,true);
+  if(motors.length) sendMotors(motors,FLOW_DUR);
+}
+function startPaint(svgEl,layout,evt){
+  if(calibrateMode) return;                 // let click handle remap
+  evt.preventDefault();
+  painting=true; curSvg=svgEl; curLayout=layout; cur=toSvgPoint(svgEl,evt);
+  try{ svgEl.setPointerCapture(evt.pointerId); }catch(e){}
+  tick();
+  if(!tickTimer) tickTimer=setInterval(tick,TICK_MS);
+}
+function movePaint(evt){ if(!painting||!curSvg) return; cur=toSvgPoint(curSvg,evt); }
+function endPaint(){
+  if(!painting) return;
+  painting=false;
+  clearInterval(tickTimer); tickTimer=null;
+  if(curSvg) clearVisual(curSvg);
+  curSvg=null; curLayout=null;
+  // frames self-expire in FLOW_DUR ms, so no explicit stop needed on release
+}
+function wireSvg(svgEl,layout){
+  svgEl.addEventListener("pointerdown",e=>startPaint(svgEl,layout,e));
+  svgEl.addEventListener("pointermove",movePaint);
+  svgEl.addEventListener("pointerup",endPaint);
+  svgEl.addEventListener("pointercancel",endPaint);
+}
+window.addEventListener("pointerup",endPaint);
+
+/* ---- controls ---- */
+document.getElementById("stop-btn").addEventListener("click",()=>{ endPaint(); stopAll(); });
+document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ endPaint(); stopAll(); } });
+document.getElementById("tab-front").addEventListener("click",()=>switchTab("front"));
+document.getElementById("tab-back").addEventListener("click",()=>switchTab("back"));
+function switchTab(w){
+  endPaint();
+  document.getElementById("tab-front").classList.toggle("active",w==="front");
+  document.getElementById("tab-back").classList.toggle("active",w==="back");
+  document.getElementById("svg-front").style.display=w==="front"?"":"none";
+  document.getElementById("svg-back").style.display=w==="back"?"":"none";
+}
+function visibleBase(){ return document.getElementById("svg-front").style.display!=="none"?0:20; }
+
+document.getElementById("calibrate-btn").addEventListener("click",e=>{
+  calibrateMode=!calibrateMode; e.target.classList.toggle("on",calibrateMode);
+  document.querySelectorAll("circle.motor").forEach(c=>c.classList.toggle("calib",calibrateMode));
+  document.getElementById("hint-text").innerHTML=calibrateMode
+    ?"Calibrate mode: click a dot and type the motor index that actually buzzed there. Dragging is paused."
+    :"Press and drag across the body — motors fire by how close they are to your cursor, fading with distance. <b>Intensity</b> is the strength at the cursor, <b>Brush size</b> is the reach.";
+});
+document.getElementById("identify-btn").addEventListener("click",async()=>{
+  const base=visibleBase(), btn=document.getElementById("identify-btn"); btn.disabled=true; const orig=btn.textContent;
+  for(let i=base;i<base+20;i++){ btn.textContent=`Pulsing motor ${i}…`; sendMotors([{index:i,intensity:60}],220); await new Promise(r=>setTimeout(r,450)); }
+  btn.textContent=orig; btn.disabled=false;
+});
+document.getElementById("allon-btn").addEventListener("click",()=>{
+  const base=visibleBase(), motors=[]; for(let i=base;i<base+20;i++) motors.push({index:i,intensity:getIntensity()});
+  sendMotors(motors,getDuration());
+});
+
+function bindReadout(id,valId,fmt){ const el=document.getElementById(id); const out=document.getElementById(valId); const upd=()=>out.textContent=fmt?fmt(el.value):el.value; el.addEventListener("input",upd); upd(); }
+bindReadout("intensity","intensity-val");
+bindReadout("brush","brush-val");
+bindReadout("duration","duration-val");
+bindReadout("falloff","falloff-val",v=>{ const n=+v; return n<=6?"soft":n>=20?"sharp":"linear"; });
+
+/* ---- session save + health ---- */
+function fillCfg(){ document.getElementById("cfg-room").value=cfg.room; document.getElementById("cfg-token").value=cfg.token; }
+document.getElementById("save-cfg-btn").addEventListener("click",()=>{
+  cfg={room:(document.getElementById("cfg-room").value||"").trim(), token:(document.getElementById("cfg-token").value||"").trim()};
+  saveCfg(cfg); checkHealth();
+});
+async function checkHealth(){
+  const dot=document.getElementById("status-dot"), text=document.getElementById("status-text"), box=document.getElementById("connect-status");
+  dot.className="";
+  if(!cfg.room||!cfg.token){ text.textContent="no session"; box.textContent="Enter your room and token, then Save."; box.className="connect-status wait"; return; }
+  try{
+    const r=await fetch(`/api/health?room=${encodeURIComponent(cfg.room)}&token=${encodeURIComponent(cfg.token)}`);
+    if(r.status===401){ text.textContent="bad token"; box.textContent="Token rejected."; box.className="connect-status bad"; return; }
+    const d=await r.json();
+    if(d.agentOnline){ dot.classList.add("ok"); text.textContent="vest online"; box.textContent="Agent connected — commands will go through."; box.className="connect-status ok"; }
+    else{ dot.classList.add("wait"); text.textContent="waiting for vest"; box.textContent="No agent polling this room. Open the agent on the vest PC."; box.className="connect-status wait"; }
+  }catch(e){ text.textContent="relay offline?"; box.textContent="Can't reach the relay API."; box.className="connect-status bad"; }
+}
+
+renderBody(document.getElementById("svg-front"),frontLayout);
+renderBody(document.getElementById("svg-back"),backLayout);
+wireSvg(document.getElementById("svg-front"),frontLayout);
+wireSvg(document.getElementById("svg-back"),backLayout);
+fillCfg(); checkHealth(); setInterval(checkHealth,4000);
+</script>
+</body>
+</html>
