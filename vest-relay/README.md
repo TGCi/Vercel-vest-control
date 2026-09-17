@@ -2,7 +2,7 @@
 
 Three parts:
 
-- **Controller UI** (`/`) — the body map. Open it anywhere; it sends commands
+- **Controller UI** (`/`) — the body map. Open  it anywhere; it sends commands
   to the relay API.
 - **Relay API** (`/api/*`) — three tiny Vercel functions that pass commands
   through a small store (Upstash Redis). No socket relay, so Vercel's
