@@ -53,6 +53,7 @@
   .field label .val{font-family:var(--mono);color:var(--text)}
   input[type=range]{width:100%;accent-color:var(--accent)}
   input[type=text],input[type=password]{background:var(--panel-2);border:1px solid var(--border);color:var(--text);padding:7px 9px;border-radius:6px;font-family:var(--mono);font-size:13px;width:100%}
+  select{background:var(--panel-2);border:1px solid var(--border);color:var(--text);padding:7px 9px;border-radius:6px;font-family:var(--sans);font-size:13px;width:100%;cursor:pointer}
   .section-title{font-size:12px;color:var(--text);font-weight:600;margin:0 0 8px 0}
   #stop-btn{position:fixed;right:24px;bottom:24px;width:96px;height:96px;border-radius:50%;background:var(--danger);border:3px solid var(--danger-bright);color:#fff;font-weight:700;font-size:14px;cursor:pointer;box-shadow:0 4px 20px rgba(229,72,77,.45);z-index:50}
   #stop-btn:active{transform:scale(.95)}
@@ -102,9 +103,7 @@
       <p class="section-title">Brush</p>
       <div class="field"><label>Intensity <span class="val" id="intensity-val">70</span></label><input type="range" id="intensity" min="0" max="100" value="70"></div>
       <div class="field" style="margin-top:10px;"><label>Brush size <span class="val" id="brush-val">70</span></label><input type="range" id="brush" min="24" max="150" step="2" value="70"></div>
-      <div class="field" style="margin-top:10px;"><label>Falloff <span class="val" id="falloff-val">linear</span></label><input type="range" id="falloff" min="1" max="30" step="1" value="10"></div>
-      <div class="field" style="margin-top:10px;"><label>Pulse duration (ms) <span class="val" id="duration-val">200</span></label><input type="range" id="duration" min="50" max="1000" step="10" value="200"></div>
-      <p style="font-size:11px;color:var(--text-dim);margin:6px 0 0;line-height:1.5;">Duration applies to Identify &amp; Pulse all. Falloff: low fades soft and wide, high is a tight spotlight.</p>
+      <div class="field" style="margin-top:10px;"><label>Falloff</label><select id="falloff"><option value="0.5">Soft — wide, gradual</option><option value="1" selected>Linear</option><option value="2">Sharp</option><option value="3.5">Spotlight — tight</option></select></div>
     </div>
     <div>
       <p class="section-title">Safety</p>
@@ -184,8 +183,7 @@ function calibrate(slot){
 
 function getIntensity(){ return parseInt(document.getElementById("intensity").value,10); }
 function getBrush(){ return parseInt(document.getElementById("brush").value,10); }
-function getFalloff(){ return parseInt(document.getElementById("falloff").value,10)/10; }
-function getDuration(){ return parseInt(document.getElementById("duration").value,10); }
+function getFalloff(){ return parseFloat(document.getElementById("falloff").value)||1; }
 
 /* ---- drag to paint ---- */
 let painting=false, curSvg=null, curLayout=null, cur={x:0,y:0}, tickTimer=null;
@@ -223,11 +221,10 @@ document.getElementById("identify-btn").addEventListener("click",async()=>{
   for(let i=0;i<40;i++){ btn.textContent=`Pulsing ${i}…`; sendMotors([{index:i,intensity:60}],220); await new Promise(r=>setTimeout(r,420)); }
   btn.textContent=orig; btn.disabled=false;
 });
-document.getElementById("allon-btn").addEventListener("click",()=>{ const m=[]; for(let i=0;i<40;i++) m.push({index:i,intensity:getIntensity()}); sendMotors(m,getDuration()); });
+document.getElementById("allon-btn").addEventListener("click",()=>{ const m=[]; for(let i=0;i<40;i++) m.push({index:i,intensity:getIntensity()}); sendMotors(m,300); });
 
 function bindReadout(id,valId,fmt){ const el=document.getElementById(id), out=document.getElementById(valId); const upd=()=>out.textContent=fmt?fmt(el.value):el.value; el.addEventListener("input",upd); upd(); }
-bindReadout("intensity","intensity-val"); bindReadout("brush","brush-val"); bindReadout("duration","duration-val");
-bindReadout("falloff","falloff-val",v=>{ const n=+v; return n<=6?"soft":n>=20?"sharp":"linear"; });
+bindReadout("intensity","intensity-val"); bindReadout("brush","brush-val");
 
 /* ---- session + health ---- */
 function fillCfg(){ document.getElementById("cfg-room").value=cfg.room; document.getElementById("cfg-token").value=cfg.token; }
