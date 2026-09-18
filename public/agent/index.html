@@ -32,10 +32,20 @@
   .btn{background:var(--panel-2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:7px;font-size:13px;cursor:pointer;font-family:var(--sans)}
   .btn:hover{border-color:var(--accent)}
   .btn.on{border-color:var(--warn);color:var(--warn)}
+  .btn.danger{border-color:#5c2a2c;color:var(--danger-bright)}
+  .btn.danger:hover{border-color:var(--danger-bright)}
   .log{font-family:var(--mono);font-size:11.5px;color:var(--text-dim);background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px;height:120px;overflow:auto;white-space:pre-wrap;line-height:1.5}
   #stop-btn{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;width:220px;height:64px;border-radius:14px;background:var(--danger);border:3px solid var(--danger-bright);color:#fff;font-weight:700;font-size:15px;letter-spacing:.5px;cursor:pointer;box-shadow:0 4px 20px rgba(229,72,77,.45);z-index:50}
   #stop-btn:active{transform:translateX(-50%) scale(.97)}
   .pill{font-size:11px;color:var(--warn);font-family:var(--mono)}
+  /* live maps */
+  .maps{display:flex;gap:16px;justify-content:center}
+  .mapcol{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .mapcol .cap{font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.6px}
+  svg.viz{background:var(--panel-2);border:1px solid var(--border);border-radius:10px}
+  svg.viz circle.motor{fill:#242a34;stroke:#333b47;stroke-width:2;transition:fill 120ms linear,fill-opacity 140ms linear,stroke 120ms linear}
+  svg.viz text.lbl{fill:#5a6472;font-family:var(--mono);font-size:12px;text-anchor:middle;pointer-events:none}
+  svg.viz path.outline{fill:none;stroke:#333b47;stroke-width:2}
 </style>
 </head>
 <body>
@@ -58,6 +68,15 @@
   </div>
 
   <div class="card">
+    <p class="section-title">Live — motors firing</p>
+    <div class="maps">
+      <div class="mapcol"><svg id="viz-front" class="viz" width="180" height="252" viewBox="0 0 300 420"></svg><span class="cap">Front</span></div>
+      <div class="mapcol"><svg id="viz-back" class="viz" width="180" height="252" viewBox="0 0 300 420"></svg><span class="cap">Back</span></div>
+    </div>
+    <p style="font-size:11px;color:var(--text-dim);margin:10px 0 0;line-height:1.5;text-align:center;">Read-only — shows what the vest is playing, brighter = stronger.</p>
+  </div>
+
+  <div class="card">
     <p class="section-title">Connection</p>
     <div class="field"><label>Relay base URL</label><input type="text" id="cfg-relay" placeholder="https://your-app.vercel.app"></div>
     <div class="grid2">
@@ -73,6 +92,9 @@
       <button class="btn" id="save-btn">Save &amp; (re)connect</button>
       <button class="btn on" id="pause-btn">Pause remote</button>
     </div>
+    <div style="margin-top:10px;">
+      <button class="btn danger" id="disc-btn" style="width:100%;">Disconnect</button>
+    </div>
   </div>
 
   <div class="card">
@@ -85,18 +107,13 @@
 
 <script>
 const APP_ID="com.vestcontrol.agent", APP_NAME="VestAgent";
+const ROWS=5, COLS=4;
 
 /* ---------- config ---------- */
 function defaultRelay(){ return location.protocol.startsWith("http") ? location.origin : ""; }
 function loadCfg(){
   let c={}; try{ c=JSON.parse(localStorage.getItem("vcAgentCfg")||"null")||{}; }catch(e){}
-  return {
-    relay: c.relay || defaultRelay(),
-    room: c.room || "",
-    token: c.token || "",
-    host: c.host || "127.0.0.1",
-    port: c.port || 15881,
-  };
+  return { relay:c.relay||defaultRelay(), room:c.room||"", token:c.token||"", host:c.host||"127.0.0.1", port:c.port||15881 };
 }
 function saveCfg(c){ localStorage.setItem("vcAgentCfg", JSON.stringify(c)); }
 let cfg = loadCfg();
@@ -105,8 +122,7 @@ let cfg = loadCfg();
 const logEl=document.getElementById("log");
 function log(msg){
   const t=new Date().toLocaleTimeString();
-  logEl.textContent += `[${t}] ${msg}\n`;
-  logEl.scrollTop=logEl.scrollHeight;
+  logEl.textContent += `[${t}] ${msg}\n`; logEl.scrollTop=logEl.scrollHeight;
   const lines=logEl.textContent.split("\n"); if(lines.length>200) logEl.textContent=lines.slice(-200).join("\n");
 }
 
@@ -128,7 +144,7 @@ function connectPlayer(){
   s.onclose=()=>{ if(ws===s) ws=null; if(!wsIntentional){ setPlayer("disconnected"); scheduleWs(); } };
   s.onerror=()=>{ if(wsState==="connecting"){ setPlayer("disconnected"); log("Can't reach Player at "+cfg.host+":"+cfg.port+" — is it running?"); } };
 }
-function scheduleWs(){ clearTimeout(wsRetry); wsRetry=setTimeout(connectPlayer,3000); }
+function scheduleWs(){ if(disconnected) return; clearTimeout(wsRetry); wsRetry=setTimeout(connectPlayer,3000); }
 function playerReady(){ return ws && ws.readyState===WebSocket.OPEN; }
 
 function frame(position,dotPoints,dur){ return {Type:"frame",Key:"vc_"+position,Frame:{Position:position,DotPoints:dotPoints,PathPoints:[],DurationMillis:dur}}; }
@@ -146,56 +162,112 @@ function sendMotorsLocal(motors,duration){
 }
 function stopAllLocal(){ if(playerReady()){ try{ ws.send(JSON.stringify({Submit:[{Type:"turnOffAll"}]})); }catch(e){} } }
 
-/* ---------- remote pause (wearer override) ---------- */
+/* ---------- live visualisation ---------- */
+function buildLayout(base){
+  const sL=55,sR=245,wL=85,wR=215,topY=55,botY=355,dots=[];
+  for(let row=0;row<ROWS;row++){
+    const t=row/(ROWS-1), left=sL+(wL-sL)*t, right=sR+(wR-sR)*t, y=topY+(botY-topY)*t;
+    for(let col=0;col<COLS;col++){ const cx=left+(right-left)*(col/(COLS-1)); dots.push({index:base+row*COLS+col,x:cx,y}); }
+  }
+  return dots;
+}
+function renderViz(svgEl,layout){
+  svgEl.innerHTML=""; const ns="http://www.w3.org/2000/svg";
+  const p=document.createElementNS(ns,"path"); p.setAttribute("d","M 55 55 L 245 55 L 215 355 L 85 355 Z"); p.setAttribute("class","outline"); svgEl.appendChild(p);
+  layout.forEach(dot=>{
+    const c=document.createElementNS(ns,"circle");
+    c.setAttribute("cx",dot.x); c.setAttribute("cy",dot.y); c.setAttribute("r",16); c.setAttribute("class","motor"); c.dataset.idx=dot.index;
+    const l=document.createElementNS(ns,"text"); l.setAttribute("x",dot.x); l.setAttribute("y",dot.y+4); l.setAttribute("class","lbl"); l.textContent=dot.index;
+    svgEl.appendChild(c); svgEl.appendChild(l);
+  });
+}
+let motorState={}; // actualIndex -> { intensity, expiry(ms perf) }
+function vizApply(motors,duration){
+  const now=performance.now(), exp=now+Math.max(60,Math.round(duration||200));
+  motors.forEach(m=>{ const idx=m.index|0, inten=Math.max(0,Math.min(100,m.intensity|0)); if(inten>0) motorState[idx]={intensity:inten,expiry:exp}; });
+}
+function clearViz(){ motorState={}; }
+function vizTick(){
+  const now=performance.now();
+  document.querySelectorAll("svg.viz circle.motor").forEach(c=>{
+    const idx=+c.dataset.idx, st=motorState[idx]; let inten=0;
+    if(st){ if(now<st.expiry) inten=st.intensity; else delete motorState[idx]; }
+    if(inten>0){ c.style.fill="var(--accent)"; c.style.fillOpacity=(0.15+0.85*(inten/100)).toFixed(3); c.style.stroke="var(--accent)"; }
+    else { c.style.fill=""; c.style.fillOpacity=""; c.style.stroke=""; }
+  });
+}
+
+/* ---------- remote pause ---------- */
 let paused=false;
 function setPaused(p){
   paused=p;
   document.getElementById("pause-btn").classList.toggle("on",p);
   document.getElementById("pause-btn").textContent=p?"Resume remote":"Pause remote";
   document.getElementById("pause-note").style.display=p?"block":"none";
+  if(p){ stopAllLocal(); clearViz(); }
 }
 
 /* ---------- command execution ---------- */
 function execute(cmd){
   if(!cmd||typeof cmd!=="object") return;
-  if(cmd.type==="stop"){ stopAllLocal(); log("STOP (remote)"); return; }
-  if(paused) return;                       // wearer override: ignore pulses while paused
-  if(cmd.type==="dot"){ sendMotorsLocal(cmd.motors||[], cmd.duration); }
+  if(cmd.type==="stop"){ stopAllLocal(); clearViz(); log("STOP (remote)"); return; }
+  if(paused) return;
+  if(cmd.type==="dot"){ sendMotorsLocal(cmd.motors||[], cmd.duration); if(playerReady()) vizApply(cmd.motors||[], cmd.duration); }
 }
 
 /* ---------- relay long-poll loop ---------- */
-let polling=false;
+let relayRunning=false, pollAbort=null, disconnected=false;
 function setRelay(state,txt){
   const d=document.getElementById("dot-relay"), t=document.getElementById("txt-relay"); d.className="dot";
   if(state==="ok") d.classList.add("ok"); else if(state==="wait") d.classList.add("wait");
   t.textContent=txt;
 }
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 async function pollLoop(){
-  if(polling) return; polling=true;
-  log("Relay polling started.");
-  while(polling){
+  if(relayRunning) return; relayRunning=true; log("Relay polling started.");
+  while(relayRunning){
     if(!cfg.relay||!cfg.room||!cfg.token){ setRelay("","not configured"); await sleep(1000); continue; }
     try{
+      pollAbort=new AbortController();
       const url=`${cfg.relay.replace(/\/$/,"")}/api/poll?room=${encodeURIComponent(cfg.room)}&token=${encodeURIComponent(cfg.token)}`;
-      const r=await fetch(url,{method:"GET"});
+      const r=await fetch(url,{method:"GET",signal:pollAbort.signal});
       if(r.status===401){ setRelay("","bad token"); await sleep(2000); continue; }
-      const d=await r.json();
-      setRelay("ok","connected");
-      if(d.commands && d.commands.length){
-        for(const cmd of d.commands){ execute(cmd); if(cmd.type==="stop") break; }
-      }
+      const d=await r.json(); setRelay("ok","connected");
+      if(d.commands && d.commands.length){ for(const cmd of d.commands){ execute(cmd); if(cmd.type==="stop") break; } }
     }catch(e){
-      setRelay("wait","reconnecting…");
-      await sleep(2000);
+      if(e && e.name==="AbortError") break;   // disconnect requested
+      setRelay("wait","reconnecting…"); await sleep(2000);
     }
   }
+  relayRunning=false;
 }
-function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function startRelay(){ if(!relayRunning) pollLoop(); }
+function stopRelay(){ relayRunning=false; if(pollAbort){ try{ pollAbort.abort(); }catch(e){} } setRelay("","disconnected"); }
+
+/* ---------- connect / disconnect ---------- */
+function updateDiscBtn(){
+  const b=document.getElementById("disc-btn");
+  b.textContent = disconnected ? "Connect" : "Disconnect";
+  b.classList.toggle("danger", !disconnected);
+}
+function doDisconnect(){
+  disconnected=true;
+  stopRelay();
+  wsIntentional=true; clearTimeout(wsRetry); if(ws){ try{ ws.close(); }catch(e){} } ws=null; setPlayer("disconnected");
+  stopAllLocal(); clearViz();
+  updateDiscBtn(); log("Disconnected.");
+}
+function doConnect(){
+  disconnected=false;
+  connectPlayer(); startRelay();
+  updateDiscBtn(); log("Connecting…");
+}
 
 /* ---------- controls ---------- */
-document.getElementById("stop-btn").addEventListener("click",()=>{ setPaused(true); stopAllLocal(); log("STOP (local) — remote paused"); });
-document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ setPaused(true); stopAllLocal(); log("STOP (local) — remote paused"); } });
-document.getElementById("pause-btn").addEventListener("click",()=>{ setPaused(!paused); if(paused) stopAllLocal(); });
+document.getElementById("stop-btn").addEventListener("click",()=>{ setPaused(true); stopAllLocal(); clearViz(); log("STOP (local) — remote paused"); });
+document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ setPaused(true); stopAllLocal(); clearViz(); log("STOP (local) — remote paused"); } });
+document.getElementById("pause-btn").addEventListener("click",()=>{ setPaused(!paused); });
+document.getElementById("disc-btn").addEventListener("click",()=>{ if(disconnected) doConnect(); else doDisconnect(); });
 
 document.getElementById("save-btn").addEventListener("click",()=>{
   cfg={
@@ -206,7 +278,9 @@ document.getElementById("save-btn").addEventListener("click",()=>{
     port:parseInt(document.getElementById("cfg-port").value,10)||15881,
   };
   saveCfg(cfg);
+  disconnected=false; updateDiscBtn();
   wsIntentional=true; if(ws){ try{ ws.close(); }catch(e){} } connectPlayer();
+  startRelay();
   log("Config saved.");
 });
 
@@ -220,7 +294,10 @@ function fillCfg(){
 
 window.addEventListener("beforeunload",()=>{ stopAllLocal(); });
 
-fillCfg();
+renderViz(document.getElementById("viz-front"),buildLayout(0));
+renderViz(document.getElementById("viz-back"),buildLayout(20));
+setInterval(vizTick,60);
+fillCfg(); updateDiscBtn();
 connectPlayer();
 pollLoop();
 </script>
