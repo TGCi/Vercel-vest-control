@@ -62,6 +62,7 @@
   .connect-status.bad{border-color:#5c2a2c;color:var(--danger-bright)}
   .connect-status.wait{border-color:#5c4a1e;color:#e6bd57}
 </style>
+<script src="https://cdn.ably.com/lib/ably.min-2.js"></script>
 </head>
 <body>
 <header>
@@ -119,7 +120,7 @@
 <button id="stop-btn">STOP</button>
 
 <script>
-const TICK_MS=100, FLOW_DUR=200, THRESHOLD=6;
+const TICK_MS=60, FLOW_DUR=200, THRESHOLD=6;
 
 /* X40 layout: 4 columns (L: 0,1  R: 2,3) x 5 rows, per side. viewBox 240x340. */
 const COLS=[74,102,138,166], ROWSY=[92,134,176,218,260];
@@ -138,12 +139,22 @@ function loadCfg(){ try{ return JSON.parse(localStorage.getItem("vcRemoteCfg")||
 function saveCfg(c){ localStorage.setItem("vcRemoteCfg", JSON.stringify(c)); }
 let cfg = loadCfg();
 
-async function sendCommand(command){
-  if(!cfg.room || !cfg.token) return;
-  try{ await fetch("/api/send",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({room:cfg.room,token:cfg.token,command})}); }catch(e){}
+/* ---- Ably realtime ---- */
+let ably=null, channel=null, agentPresent=false;
+function connectRealtime(){
+  disconnectRealtime();
+  if(!cfg.room||!cfg.token){ updateStatus(); return; }
+  ably=new Ably.Realtime({ authUrl:"/api/ably-token", authParams:{ token:cfg.token, room:cfg.room, who:"controller" }, echoMessages:false });
+  ably.connection.on(()=>{ if(ably&&ably.connection.state==="connected") refreshPresence(); updateStatus(); });
+  channel=ably.channels.get("vest:"+cfg.room);
+  channel.presence.subscribe(refreshPresence);
+  channel.presence.enter({role:"controller"}).catch(()=>{});
+  updateStatus();
 }
-function sendMotors(motors,duration){ sendCommand({type:"dot", motors, duration}); }
-function stopAll(){ sendCommand({type:"stop"}); }
+function disconnectRealtime(){ try{ if(channel){ channel.presence.leave(); channel.presence.unsubscribe(); } }catch(e){} try{ if(ably) ably.close(); }catch(e){} ably=null; channel=null; agentPresent=false; }
+function publish(command){ if(channel && ably && ably.connection.state==="connected") channel.publish("cmd",command); }
+function sendMotors(motors,duration){ publish({type:"dot", motors, duration}); }
+function stopAll(){ publish({type:"stop"}); }
 
 /* ---- mapping ---- */
 function defaultMapping(){ const m={}; for(let i=0;i<40;i++) m[i]=i; return m; }
@@ -220,24 +231,27 @@ bindReadout("falloff","falloff-val",v=>{ const n=+v; return n<=6?"soft":n>=20?"s
 
 /* ---- session + health ---- */
 function fillCfg(){ document.getElementById("cfg-room").value=cfg.room; document.getElementById("cfg-token").value=cfg.token; }
-document.getElementById("save-cfg-btn").addEventListener("click",()=>{ cfg={room:(document.getElementById("cfg-room").value||"").trim(),token:(document.getElementById("cfg-token").value||"").trim()}; saveCfg(cfg); checkHealth(); });
-async function checkHealth(){
+document.getElementById("save-cfg-btn").addEventListener("click",()=>{ cfg={room:(document.getElementById("cfg-room").value||"").trim(),token:(document.getElementById("cfg-token").value||"").trim()}; saveCfg(cfg); connectRealtime(); });
+async function refreshPresence(){
+  if(!channel){ agentPresent=false; updateStatus(); return; }
+  try{ const ms=await channel.presence.get(); agentPresent=ms.some(m=>String(m.clientId||"").startsWith("agent")); }catch(e){ agentPresent=false; }
+  updateStatus();
+}
+function updateStatus(){
   const dot=document.getElementById("status-dot"), text=document.getElementById("status-text"), box=document.getElementById("connect-status"); dot.className="";
   if(!cfg.room||!cfg.token){ text.textContent="no session"; box.textContent="Enter your room and token, then Save."; box.className="connect-status wait"; return; }
-  try{
-    const r=await fetch(`/api/health?room=${encodeURIComponent(cfg.room)}&token=${encodeURIComponent(cfg.token)}`);
-    if(r.status===401){ text.textContent="bad token"; box.textContent="Token rejected."; box.className="connect-status bad"; return; }
-    const d=await r.json();
-    if(d.agentOnline){ dot.classList.add("ok"); text.textContent="vest online"; box.textContent="Agent connected — commands will go through."; box.className="connect-status ok"; }
-    else{ dot.classList.add("wait"); text.textContent="waiting for vest"; box.textContent="No agent polling this room. Open the agent on the vest PC."; box.className="connect-status wait"; }
-  }catch(e){ text.textContent="relay offline?"; box.textContent="Can't reach the relay API."; box.className="connect-status bad"; }
+  const st=ably?ably.connection.state:"initialized";
+  if(st==="failed"){ dot.classList.add(""); text.textContent="auth failed"; box.textContent="Token rejected, or Ably not configured on the server."; box.className="connect-status bad"; return; }
+  if(st!=="connected"){ dot.classList.add("wait"); text.textContent="connecting…"; box.textContent="Connecting to realtime…"; box.className="connect-status wait"; return; }
+  if(agentPresent){ dot.classList.add("ok"); text.textContent="vest online"; box.textContent="Agent connected — commands stream live."; box.className="connect-status ok"; }
+  else{ dot.classList.add("wait"); text.textContent="waiting for vest"; box.textContent="Connected. No agent in this room yet — open the agent on the vest PC."; box.className="connect-status wait"; }
 }
 
 renderBody(document.getElementById("svg-front"),frontLayout,false);
 renderBody(document.getElementById("svg-back"),backLayout,true);
 wireSvg(document.getElementById("svg-front"),frontLayout);
 wireSvg(document.getElementById("svg-back"),backLayout);
-fillCfg(); checkHealth(); setInterval(checkHealth,4000);
+fillCfg(); connectRealtime(); setInterval(refreshPresence,5000);
 </script>
 </body>
 </html>

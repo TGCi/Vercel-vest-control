@@ -1,85 +1,70 @@
-# Vest Relay — control your X40 from anywhere, no open ports
+# Vest Relay — realtime X40 control from anywhere, no open ports
 
-Three parts:
+Realtime over **Ably** (free tier). Three parts:
 
-- **Controller UI** (`/`) — the body map. Open it anywhere; it sends commands
-  to the relay API.
-- **Relay API** (`/api/*`) — three tiny Vercel functions that pass commands
-  through a small store (Upstash Redis). No socket relay, so Vercel's
-  per-instance limits don't bite.
-- **Agent** (`/agent`) — a page you open **on the vest PC**. It dials *out* to
-  the relay (nothing inbound → no firewall changes) and forwards commands into
-  bHaptics Player locally.
+- **Controller UI** (`/`) — the vest body map. Drag to fire motors; publishes commands live.
+- **Token API** (`/api/ably-token`) — one Vercel function that hands out short-lived,
+  room-scoped Ably tokens. Your Ably secret stays on the server; access is gated by
+  your `RELAY_TOKEN`.
+- **Agent** (`VestAgent.html`, run locally on the vest PC) — subscribes to the room in
+  realtime and drives bHaptics Player. Shows a live read-only view of what's firing.
 
 ```
-[Controller UI]  --POST /api/send-->  [Vercel + Upstash]  <--GET /api/poll (held open)--  [Agent on vest PC]  --ws://127.0.0.1:15881-->  Player --> vest
-   (anywhere, https)                    (the relay)              (dials OUT, no ports)
+[Controller]  --wss-->  [ Ably realtime ]  <--wss--  [Agent on vest PC]  --ws://127.0.0.1:15881-->  Player --> vest
+   (Vercel, https)        (nearest edge)              (local file, dials OUT)
 ```
 
-Only bHaptics Player is required on the vest PC — same as before.
+Nothing inbound on the vest PC (no firewall changes), everything encrypted, and messages
+route through Ably's nearest edge — lower latency than the old polling relay.
 
 ---
 
-## Deploy (one time, ~5 min)
+## Deploy (one time)
 
-1. **Get the code on GitHub** (or use the Vercel CLI). Push this folder to a repo.
+1. **Ably key.** Sign up free at ably.com → create an app → copy its **Root API key**
+   (looks like `xxxx.yyyy:zzzz`). Free tier: 6M messages/month, 200 connections.
 
-2. **Import to Vercel** → New Project → pick the repo → Deploy. It builds as-is.
+2. **Deploy to Vercel.** Upload this folder (or import the repo). It builds as-is and
+   installs the `ably` dependency.
 
-3. **Add a Redis store.** In the project: **Storage → Create → Upstash Redis**
-   (Marketplace). Connect it to the project. This auto-adds the
-   `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` env vars (the code also
-   accepts the `KV_REST_API_*` names).
+3. **Environment variables** (Project → Settings → Environment Variables):
+   - `ABLY_API_KEY` = the Ably root key from step 1
+   - `RELAY_TOKEN`  = a long random string (your shared password for both ends)
 
-4. **Set your shared secret.** Project → **Settings → Environment Variables** →
-   add `RELAY_TOKEN` = a long random string. This is the password both the
-   controller and the agent must present.
+4. **Redeploy** so the variables take effect. Confirm it works by opening
+   `https://<your-app>.vercel.app/api/ably-token?room=test&token=YOUR_TOKEN` —
+   you should get JSON with a `keyName`/`mac` (a token request). `bad token` means the
+   token doesn't match; an `ABLY_API_KEY not set` error means the key didn't save.
 
-5. **Confirm Fluid Compute is on** (Settings → Functions). It's the default now;
-   it's what lets the poll request stay open. Then **Redeploy** so the env vars
-   and settings take effect.
-
-Your app is at `https://<your-app>.vercel.app`.
+No database, no Upstash — Ably is the realtime layer.
 
 ---
 
 ## Use it
 
-**On the vest PC** (use Chrome or Edge):
-1. Start bHaptics Player, make sure the X40 is paired.
-2. Open `https://<your-app>.vercel.app/agent`.
-3. Enter your **Room** (any name you pick, e.g. `my-vest`) and the **Token**
-   (the `RELAY_TOKEN` value). Leave Host/Port at `127.0.0.1` / `15881`.
-   Click **Save & (re)connect**. Both dots go teal: Player + Relay.
-   Leave this window open.
+**On the vest PC** (Chrome or Edge): open the local file **`VestAgent.html`**
+(not the hosted `/agent` — an https page can't reach `ws://localhost`). Start bHaptics
+Player with the X40 paired. Set **Relay base URL** = `https://<your-app>.vercel.app`,
+your **Room** (any name) and **Token**, leave Host/Port at `127.0.0.1` / `15881`, and
+**Save & (re)connect**. Both dots go teal (Player + Relay). Leave it open.
 
-**Anywhere** (phone, laptop, another PC):
-1. Open `https://<your-app>.vercel.app/`.
-2. Enter the **same Room and Token**, click **Save**. Header shows "vest online".
-3. Click motors — they fire on the vest through the relay.
+**Anywhere:** open `https://<your-app>.vercel.app/`, enter the **same Room and Token**,
+Save. Header shows "vest online". Drag across the vests — motors fire live and the
+wearer's screen mirrors them.
 
-`Esc` / red button on the controller sends a stop. On the agent, the local
-**STOP** and **Pause remote** always win over the remote side.
+`Esc` / red button = stop. On the agent, **Pause remote** and **Disconnect** always win.
 
 ---
 
-## Notes & limits
+## Notes
 
-- **Latency:** every buzz makes a cloud round trip, so it's a touch laggier than
-  LAN/Tailscale. Set the project **region** (Settings → Functions) near you to
-  minimise it. Fine for manual control; not for tight real-time patterns.
-- **Keep the agent tab open and foregrounded.** Browsers throttle background
-  tabs, which can delay polling. If you want a headless, always-on agent that
-  runs as a background service instead of a tab, ask — it's a ~40-line Node
-  version of `/agent` that behaves identically.
-- **Security is token-level.** Anyone with your URL + room + token can drive the
-  vest. Treat the token like a password; rotate it by changing `RELAY_TOKEN`.
-  Because it's a device on a body, the agent's local STOP/Pause is the real
-  safety layer and never depends on the remote side.
-- **Pulses are time-bounded** (each carries its own duration) and the queue
-  self-expires after 30s, so a dropped connection can't leave a motor stuck on.
-
-## Optional: launch the agent as an app window
-
-Put `Launch Agent.bat` (below) on the vest PC's desktop, edit the URL inside to
-your deployment, and double-click it to open the agent in a clean Edge window.
+- **Free-tier headroom:** dragging streams ~16 messages/sec. Ably's free cap is 6M/month
+  and 50 msg/sec per channel, so normal use is well within it; only many hours of
+  continuous dragging would approach the monthly cap.
+- **Latency:** realtime, but still a cloud round-trip — very usable, not zero. Same-network
+  users who want the absolute lowest latency could run a LAN/Tailscale path instead.
+- **Security:** the Ably secret never leaves Vercel; clients get room-scoped tokens, gated
+  by `RELAY_TOKEN`. Treat that token like a password. The agent's local stop is the real
+  safety layer and never depends on the network.
+- **Keep the agent window open and foregrounded** (browsers throttle background tabs). A
+  headless Node agent removes that caveat — ask if you want it.

@@ -1,9 +1,9 @@
 {
   "name": "vest-relay",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "dependencies": {
-    "@upstash/redis": "^1.34.3"
+    "ably": "^2.6.0"
   }
 }
